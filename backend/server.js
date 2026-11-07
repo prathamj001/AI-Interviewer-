@@ -1,0 +1,109 @@
+
+import express from "express";
+import http from "http";
+import dotenv from "dotenv";
+import cors from "cors";
+import path from "path";
+import mongoose from "mongoose";
+import { Server } from "socket.io";
+import connectDB from "./config/db.js";
+import userRoutes from "./routes/userRoutes.js";
+import sessionRoutes from "./routes/sessionRoutes.js";
+import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
+
+const __dirname = path.resolve();
+dotenv.config();
+dotenv.config({ path: path.join(__dirname, "backend", ".env") });
+dotenv.config({ path: path.join(__dirname, ".env") });
+
+connectDB();
+
+const app = express();
+
+const server = http.createServer(app);
+
+const allowedOrigins = [
+    'http://localhost:5174',
+    'http://localhost:5173',
+    'https://mock-mate-livid-two.vercel.app',
+];
+
+const checkOrigin = (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+        callback(null, true);
+    } else {
+        callback(new Error('Not allowed by CORS'));
+    }
+};
+
+const io = new Server(server, {
+    cors: {
+        origin: checkOrigin,
+        methods: ['GET', 'POST', 'PUT', 'DELETE',  'OPTIONS'],
+        credentials: true,
+        allowedHeaders: ['Content-Type', 'Authorization'],
+    }
+})
+
+app.use(cors({
+    origin: checkOrigin,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization',"X-Requested-With"],
+}))
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.set("io", io);
+
+// Database Connection Guard Middleware
+app.use("/api", (req, res, next) => {
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({
+            message: "Database Connection Error: Unable to connect to MongoDB Atlas. Please ensure MONGO_URI is set on backend host (Render) and MongoDB Atlas IP access (0.0.0.0/0) is allowed."
+        });
+    }
+    next();
+});
+
+app.use("/api/users", userRoutes);
+app.use("/api/sessions", sessionRoutes);
+
+if (process.env.NODE_ENV === "production") {
+    const __dirname = path.resolve();
+    app.use(express.static(path.join(__dirname, "../frontend/dist")));
+
+    app.get(/(.*)/, (req, res) =>
+        res.sendFile(path.resolve(__dirname, "../frontend", "dist", "index.html"))
+    );
+} else {
+    app.get("/", (req, res) => {
+        res.send("API is running");
+    });
+}
+
+io.on("connection", (socket) => {
+    console.log(`A user Connected ${socket.id}`);
+    const userId=socket.handshake.query.userId;
+    if(userId){
+
+        socket.join(userId);
+        console.log(`User ${socket.id} joined room: ${userId}`);
+    }
+
+    socket.on("disconnect", () => {
+        console.log(`User Disconnected ${socket.id}`);
+    });
+});
+
+app.use(notFound);
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 5001;
+
+server.listen(PORT, () => {
+    console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+});
+
+
